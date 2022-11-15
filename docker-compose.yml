@@ -1,0 +1,174 @@
+version: '3.6'
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      driver: default
+  # nextcloud:
+  #   driver: bridge
+  #   internal: true
+  #   ipam:
+  #     driver: default
+
+services:
+  home_assistant:
+    container_name: home_assistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+  #image: ghcr.io/home-assistant/raspberrypi3-homeassistant:stable
+  #image: ghcr.io/home-assistant/raspberrypi4-homeassistant:stable
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+    - /etc/localtime:/etc/localtime:ro
+    - ./volumes/home_assistant:/config
+    - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+    devices:
+    - "/dev/ttyAMA0:/dev/ttyAMA0"
+    - "/dev/vcio:/dev/vcio"
+    - "/dev/gpiomem:/dev/gpiomem"
+    privileged: true
+  homebridge:
+    container_name: homebridge
+    image: oznu/homebridge:latest
+    restart: unless-stopped
+    environment:
+    # - TZ=Etc/UTC
+    - PGID=1000
+    - PUID=1000
+    - HOMEBRIDGE_CONFIG_UI=1
+    - HOMEBRIDGE_CONFIG_UI_PORT=8581
+    volumes:
+    - ./volumes/homebridge:/homebridge
+    network_mode: host
+
+  influxdb2:
+    container_name: influxdb2
+    image: "influxdb:latest"
+    restart: unless-stopped
+    environment:
+    # - TZ=Etc/UTC
+    - DOCKER_INFLUXDB_INIT_USERNAME=me
+    - DOCKER_INFLUXDB_INIT_PASSWORD=mypassword
+    - DOCKER_INFLUXDB_INIT_ORG=myorg
+    - DOCKER_INFLUXDB_INIT_BUCKET=mybucket
+    - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token
+    - DOCKER_INFLUXDB_INIT_MODE=setup
+  # - DOCKER_INFLUXDB_INIT_MODE=upgrade
+    ports:
+    - "8087:8086"
+    volumes:
+    - ./volumes/influxdb2/data:/var/lib/influxdb2
+    - ./volumes/influxdb2/config:/etc/influxdb2
+    - ./volumes/influxdb2/backup:/var/lib/backup
+  # - ./volumes/influxdb.migrate/data:/var/lib/influxdb:ro
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  mosquitto:
+    container_name: mosquitto
+    build:
+      context: ./.templates/mosquitto/.
+      args:
+      - MOSQUITTO_BASE=eclipse-mosquitto:latest
+    restart: unless-stopped
+    # environment:
+    # - TZ=Etc/UTC
+    ports:
+    - "1883:1883"
+    volumes:
+    - ./volumes/mosquitto/config:/mosquitto/config
+    - ./volumes/mosquitto/data:/mosquitto/data
+    - ./volumes/mosquitto/log:/mosquitto/log
+    - ./volumes/mosquitto/pwfile:/mosquitto/pwfile
+
+  nodered:
+    container_name: nodered
+    build:
+      context: ./services/nodered/.
+      args:
+      - DOCKERHUB_TAG=latest
+      - EXTRA_PACKAGES=
+    restart: unless-stopped
+    user: "0"
+    # environment:
+    # - TZ=Etc/UTC
+    ports:
+    - "1880:1880"
+    volumes:
+    - ./volumes/nodered/data:/data
+    - ./volumes/nodered/ssh:/root/.ssh
+    - /var/run/docker.sock:/var/run/docker.sock
+    - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+    # devices:
+    # - "/dev/ttyAMA0:/dev/ttyAMA0"
+    # - "/dev/vcio:/dev/vcio"
+    # - "/dev/gpiomem:/dev/gpiomem"
+
+  portainer-ce:
+    container_name: portainer-ce
+    image: portainer/portainer-ce
+    restart: unless-stopped
+    ports:
+    - "8000:8000"
+    - "9000:9000"
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+    - ./volumes/portainer-ce/data:/data
+
+  portainer_agent:
+    image: portainer/agent
+    container_name: portainer-agent
+    ports:
+    - "9001:9001"
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+    - /var/lib/docker/volumes:/var/lib/docker/volumes
+    restart: unless-stopped
+
+  telegraf:
+    container_name: telegraf
+    build: ./.templates/telegraf/.
+    hostname: iotstack # optional
+    restart: unless-stopped
+    # environment:
+    # - TZ=Etc/UTC
+    ports:
+    - "8092:8092/udp"
+    - "8094:8094/tcp"
+    - "8125:8125/udp"
+    volumes:
+    - ./volumes/telegraf:/etc/telegraf
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+    - influxdb2
+    - mosquitto
+
+  wireguard:
+    container_name: wireguard
+    image: ghcr.io/linuxserver/wireguard
+    restart: unless-stopped
+    environment:
+    - PUID=1000
+    - PGID=1000
+    # - TZ=Etc/UTC
+    - SERVERURL=your.dynamic.dns.name
+    - SERVERPORT=51820
+    - PEERS=laptop,phone,tablet
+    - PEERDNS=auto
+  # - PEERDNS=172.30.0.1
+    - ALLOWEDIPS=0.0.0.0/0
+    ports:
+    - "51820:51820/udp"
+    volumes:
+    - ./volumes/wireguard:/config
+    - /lib/modules:/lib/modules:ro
+    cap_add:
+    - NET_ADMIN
+    - SYS_MODULE
+    sysctls:
+    - net.ipv4.conf.all.src_valid_mark=1
+
