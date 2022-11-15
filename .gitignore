@@ -21,3 +21,4 @@ post_restore.sh
 .vscode
 *.code-workspace
 
+docker-compose.yml
